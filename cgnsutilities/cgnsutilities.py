@@ -288,17 +288,15 @@ class Grid(object):
             blk.refine(axes)
 
     def renameBlocks(self, useOldNames=False):
-        """Rename all blocks in a consistent fashion
-
-        Parameters
-        ----------
-        useOldNames : bool
-            If True, we use the name stored in the block and redo only the numbering.
-            Otherwise, we use 'domain' as the base name for all blocks.
-
-        """
+        """Rename all blocks in a consistent fashion"""
         i = 1
         for blk in self.blocks:
+
+            # If we the actualName flag is true, then we use the name stored
+            # in the block. Otherwise, we use 'domain' as the base of the name.
+            # This is to keep the behavior consistent with previous
+            # cgns_utils operations while allowing for different naming
+            # for use in pyWarpMulti.
             if useOldNames:
                 blk.name = blk.name.split(".")[0] + ".%5.5d" % i
             else:
@@ -652,8 +650,32 @@ class Grid(object):
         for blk in self.blocks:
             blk.double2D()
 
+    # def simpleCart(self, dh, hExtra, nExtra, sym, mgcycle, outFile):
+    #     """Generates a Cartesian mesh around the provided grid"""
+
+    #     # Get the bounds of each grid.
+    #     xMin = 1e20 * numpy.ones(3)
+    #     xMax = -1.0 * numpy.ones(3)
+
+    #     for blk in self.blocks:
+    #         tmp1 = numpy.min(blk.coords, axis=(0, 1, 2))
+    #         tmp2 = numpy.max(blk.coords, axis=(0, 1, 2))
+    #         for iDim in range(3):
+    #             xMin[iDim] = min(xMin[iDim], tmp1[iDim])
+    #             xMax[iDim] = max(xMax[iDim], tmp2[iDim])
+
+    #     # Call the generic routine
+    #     return simpleCart(xMin, xMax, dh, hExtra, nExtra, sym, mgcycle, outFile)
+
     def simpleCart(self, dh, hExtra, nExtra, sym, mgcycle, outFile):
         """Generates a Cartesian mesh around the provided grid"""
+
+        xMin, xMax = self.getBoundingBox()
+
+        # Call the generic routine
+        return simpleCart(xMin, xMax, dh, hExtra, nExtra, sym, mgcycle, outFile)
+
+    def getBoundingBox(self):
 
         # Get the bounds of each grid.
         xMin = 1e20 * numpy.ones(3)
@@ -666,17 +688,22 @@ class Grid(object):
                 xMin[iDim] = min(xMin[iDim], tmp1[iDim])
                 xMax[iDim] = max(xMax[iDim], tmp2[iDim])
 
-        # Call the generic routine
-        return simpleCart(xMin, xMax, dh, hExtra, nExtra, sym, mgcycle, outFile)
+        return xMin, xMax
 
-    def simpleOCart(self, dh, hExtra, nExtra, sym, mgcycle, outFile, userOptions=None):
+
+    def simpleOCart(self, dh, hExtra, nExtra, sym, mgcycle, outFile, userOptions=None, xBounds=None):
         """Generates a Cartesian mesh around the provided grid, surrounded by an O-mesh.
         This function requires pyHyp to be installed. If this function is run with MPI,
         pyHyp will be run in parallel.
         """
 
         # First run simpleCart with no extension:
-        X, dx = self.simpleCart(dh, 0.0, 0, sym, mgcycle, outFile=None)
+        if xBounds is None:
+            # we will automatically determine the bounding box
+            X, dx = self.simpleCart(dh, 0.0, 0, sym, mgcycle, outFile=None)
+        else:
+            # we are provided the bounding box, skip to the generic simple cart routine
+            X, dx = simpleCart(xBounds[0], xBounds[1], dh, 0, 0, sym, mgcycle, outFile=None)
 
         # Pull out the patches. Note that we have to pay attention to
         # the symmetry and the ordering of the patches to make sure
@@ -751,6 +778,89 @@ class Grid(object):
 
             # Delete the temp file
             os.remove(fName)
+
+    # def simpleOCart(self, dh, hExtra, nExtra, sym, mgcycle, outFile, userOptions=None):
+    #     """Generates a Cartesian mesh around the provided grid, surrounded by an O-mesh.
+    #     This function requires pyHyp to be installed. If this function is run with MPI,
+    #     pyHyp will be run in parallel.
+    #     """
+
+    #     # First run simpleCart with no extension:
+    #     X, dx = self.simpleCart(dh, 0.0, 0, sym, mgcycle, outFile=None)
+
+    #     # Pull out the patches. Note that we have to pay attention to
+    #     # the symmetry and the ordering of the patches to make sure
+    #     # that all the normals are pointing out.
+    #     patches = []
+
+    #     # First take patches that are opposite from the origin planes
+    #     if "xmax" not in sym:
+    #         patches.append(X[-1, :, :, :])
+    #     if "ymax" not in sym:
+    #         patches.append(X[:, -1, :, :][::-1, :, :])
+    #     if "zmax" not in sym:
+    #         patches.append(X[:, :, -1, :])
+
+    #     if "x" not in sym and "xmin" not in sym:
+    #         patches.append(X[0, :, :, :][::-1, :, :])
+    #     if "y" not in sym and "ymin" not in sym:
+    #         patches.append(X[:, 0, :, :])
+    #     if "z" not in sym and "zmin" not in sym:
+    #         patches.append(X[:, :, 0, :][::-1, :, :])
+
+    #     # Set up the generic input for pyHyp
+    #     hypOptions = {
+    #         "patches": patches,
+    #         "unattachedEdgesAreSymmetry": True,
+    #         "outerFaceBC": "farfield",
+    #         "autoConnect": True,
+    #         "BC": {},
+    #         "N": nExtra,
+    #         "s0": numpy.average(dx),
+    #         "marchDist": hExtra,
+    #         "cmax": 3.0,
+    #     }
+
+    #     # Use user-defined options if provided
+    #     if userOptions is not None:
+    #         hypOptions.update(userOptions)
+
+    #     # Run pyHyp
+    #     from pyhyp import pyHyp
+
+    #     hyp = pyHyp(options=hypOptions)
+    #     hyp.run()
+
+    #     from mpi4py import MPI
+
+    #     fName = None
+    #     if MPI.COMM_WORLD.rank == 0:
+    #         dirpath = tempfile.mkdtemp()
+    #         fName = os.path.join(dirpath, "tmp.cgns")
+
+    #     hyp.writeCGNS(MPI.COMM_WORLD.bcast(fName))
+
+    #     # Reset symmetry to single axis
+    #     if "x" in sym or "xmin" in sym or "xmax" in sym:
+    #         sym = "x"
+    #     elif "y" in sym or "ymin" in sym or "ymax" in sym:
+    #         sym = "y"
+    #     elif "z" in sym or "zmin" in sym or "zmax" in sym:
+    #         sym = "z"
+
+    #     if MPI.COMM_WORLD.rank == 0:
+    #         # Read the pyhyp mesh back in and add our additional "X" from above.
+    #         grid = readGrid(fName)
+    #         dims = X.shape[0:3]
+    #         grid.addBlock(Block("interiorBlock", dims, X))
+    #         grid.renameBlocks()
+    #         grid.connect()
+    #         grid.BCs = []
+    #         grid.autoFarfieldBC(sym)
+    #         grid.writeToCGNS(outFile)
+
+    #         # Delete the temp file
+    #         os.remove(fName)
 
     def cartesian(self, cartFile, outFile):
         """Generates a Cartesian mesh around the provided grid"""
@@ -3037,18 +3147,18 @@ def mirrorGrid(grid, axis, tol, useOldNames=False):
         newGrid.addBlock(blk)
 
         if useOldNames:
-            # Add the current block name to the new grid
+            # add the current block name to the new grid
             blk.name = blk.name.split(".")[0]
 
         mirrorBlk = copy.deepcopy(blk)
         mirrorBlk.flip(axis)
         newGrid.addBlock(mirrorBlk)
-
+        newGrid.blocks[-1].name = blk.name.split(".")[0] + "_mirror"
         if useOldNames:
-            # Add the new mirrored block name to the new grid
+            # add the new mirrored block name to the new grid
             newGrid.blocks[-1].name = blk.name.split(".")[0] + "_mirror"
 
-            print(f"Mirroring block: {blk.name} to {newGrid.blocks[-1].name}")
+            print("Mirroring block: %s  to  %s" % (blk.name, newGrid.blocks[-1].name))
 
     # Now rename the blocks and redo-connectivity
     newGrid.renameBlocks(useOldNames=useOldNames)
@@ -3373,7 +3483,7 @@ def mergeGrid(grid):
     return grid
 
 
-def combineGrids(grids, useOldNames=False):
+def combineGrids(grids, useOldNames=False, nameInput="domain"):
 
     """Method that takes in a list of grids and returns a new grid object
     containing all zones from each grid. The blocks are renamed as
@@ -3388,8 +3498,9 @@ def combineGrids(grids, useOldNames=False):
     # Create a dictionary to contain grid objects with their names
     # as the corresponding keys
     gridDict = {}
+    count=0
     for grid in grids:
-
+        
         # Create a dictionary of copies so the original grids are not modified
         gridDict[grid.name] = copy.deepcopy(grid)
 
@@ -3418,7 +3529,10 @@ def combineGrids(grids, useOldNames=False):
             if not useOldNames:
                 blockName = name
             else:
-                blockName = blk.name.split(".")[0]
+                if blk.name.split(".")[0] =="domain":
+                    blockName = nameInput
+                else:
+                    blockName = blk.name.split(".")[0]
             newName = blockName + f".{nBlock:05}"
             zoneMap[blk.name] = newName
             blk.name = newName
